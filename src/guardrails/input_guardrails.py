@@ -51,14 +51,31 @@ def detect_injection(user_input: str) -> InputStatus:
     Returns:
         ``"BLOCK"`` if injection detected (chặn), ``"ALLOW"`` otherwise (cho qua).
     """
+    import unicodedata
+
+    # Canonicalize Unicode and strip invisible/zero-width characters
+    normalized = unicodedata.normalize("NFKC", user_input or "")
+    for ch in ("\u200b", "\u200c", "\u200d", "\ufeff", "\u2060"):
+        normalized = normalized.replace(ch, "")
+
     INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
+        r"ignore\s+(all\s+)?(previous|above|prior)?\s*instructions?",
+        r"disregard\s+(all\s+)?(previous|above|prior)?\s*(instructions?|rules?)",
+        r"you\s+are\s+now\b",
+        r"(?:system|developer)\s+(?:prompt|instruction)|system\s+override",
+        r"(?:reveal|disclose|show|print)\s+(your\s+)?(system\s+)?(prompt|instructions?|secrets?|password|api\s*key|config)",
+        r"pretend\s+(you\s+are|to\s+be)",
+        r"act\s+as\s+(a\s+|an\s+)?(unrestricted|jailbroken|evil|DAN)",
+        r"\bDAN\b",
+        r"output\s+(your\s+)?(config|instructions?|prompt)\s+(as|in)\s+(json|yaml|xml)",
+        r"fill\s+in\s*(the\s*)?(blank|blanks|___)",
+        r"(?:password|mật\s*khẩu)\s*[:=]\s*\S+",
+        r"bỏ\s+qua\s+(mọi\s+)?hướng\s+dẫn",
+        r"tiết\s+lộ\s+(mật\s+khẩu|api|system\s*prompt)",
     ]
 
     for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, user_input, re.IGNORECASE):
+        if re.search(pattern, normalized, re.IGNORECASE):
             return "BLOCK"
     return "ALLOW"
 
@@ -84,14 +101,39 @@ def topic_filter(user_input: str) -> InputStatus:
         ``"BLOCK"`` = chặn (off-topic hoặc topic cấm).
         ``"ALLOW"`` = cho qua (câu banking hợp lệ).
     """
-    input_lower = user_input.lower()
+    if not user_input or not user_input.strip():
+        return "BLOCK"
 
-    # TODO: Implement logic:
+    import unicodedata
+
+    raw_lower = user_input.lower()
+    nfkd = unicodedata.normalize("NFD", raw_lower)
+    no_accent = "".join(c for c in nfkd if unicodedata.category(c) != "Mn")
+    no_accent = no_accent.replace("đ", "d").replace("Đ", "d")
+
     # 1. If input contains any blocked topic -> return "BLOCK"
-    # 2. If input doesn't contain any allowed topic -> return "BLOCK"
-    # 3. Otherwise -> return "ALLOW"
+    for b in BLOCKED_TOPICS:
+        if b in raw_lower or b in no_accent:
+            return "BLOCK"
 
-    pass  # Replace with your implementation
+    # 2. If input contains any allowed banking topic -> return "ALLOW"
+    for a in ALLOWED_TOPICS:
+        if a in raw_lower or a in no_accent:
+            return "ALLOW"
+
+    # Common Vietnamese banking variations with accents
+    vi_banking_terms = [
+        "tài khoản", "giao dịch", "tiết kiệm", "lãi suất",
+        "chuyển tiền", "thẻ tín dụng", "số dư", "vay",
+        "ngân hàng", "rút tiền", "gửi tiền", "thanh toán",
+        "chuyển khoản", "sổ tiết kiệm", "thẻ ghi nợ", "vay vốn",
+    ]
+    for vi_term in vi_banking_terms:
+        if vi_term in raw_lower:
+            return "ALLOW"
+
+    # 3. Otherwise -> off-topic -> return "BLOCK"
+    return "BLOCK"
 
 
 # ============================================================
@@ -144,14 +186,19 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         self.total_count += 1
         text = self._extract_text(user_message)
 
-        # TODO: Implement logic:
-        # 1. Call detect_injection(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 2. Call topic_filter(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 3. If both return "ALLOW": return None (let message through)
+        if detect_injection(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "Yêu cầu bị từ chối do vi phạm quy tắc an toàn hệ thống (phát hiện prompt injection)."
+            )
 
-        pass  # Replace with your implementation
+        if topic_filter(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "VinBank chỉ hỗ trợ các câu hỏi liên quan đến sản phẩm và dịch vụ ngân hàng."
+            )
+
+        return None
 
 
 # ============================================================
